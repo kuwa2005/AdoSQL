@@ -2,6 +2,8 @@
 
 Windows 向けの **コマンドライン対話型 Access SQL クライアント**（実行イメージ: `adosql.exe`）。ADO 経由で `.accdb`（主対象）および環境に応じ `.mdb` に接続し、Access SQL を対話実行する。
 
+リポジトリ: [github.com/kuwa2005/AdoSQL](https://github.com/kuwa2005/AdoSQL)
+
 ## ステータス
 
 - **仕様**: [仕様書.md](./仕様書.md) に集約
