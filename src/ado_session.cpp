@@ -3,6 +3,7 @@
 #include "console.hpp"
 
 #include <algorithm>
+#include <cwchar>
 #include <cwctype>
 #include <iomanip>
 #include <sstream>
@@ -19,6 +20,12 @@
 namespace adosql {
 
 namespace {
+constexpr long kAdStateClosed = 0;
+constexpr long kAdConnectUnspecified = -1;
+constexpr long kAdCmdText = 1;
+constexpr AdoDb::SchemaEnum kAdSchemaTables = static_cast<AdoDb::SchemaEnum>(20);
+constexpr AdoDb::SchemaEnum kAdSchemaViews = static_cast<AdoDb::SchemaEnum>(23);
+constexpr AdoDb::SchemaEnum kAdSchemaColumns = static_cast<AdoDb::SchemaEnum>(4);
 
 void Trim(std::wstring& s) {
   while (!s.empty() && std::iswspace(s.front())) s.erase(s.begin());
@@ -139,7 +146,7 @@ void AdoSession::Disconnect() {
       impl_->conn->RollbackTrans();
       impl_->txn_open = false;
     }
-    if (impl_->conn->GetState() != adStateClosed) impl_->conn->Close();
+    if (impl_->conn->GetState() != kAdStateClosed) impl_->conn->Close();
   } catch (...) {
   }
   impl_->conn = nullptr;
@@ -161,7 +168,7 @@ bool AdoSession::Connect(const std::wstring& db_path, const std::wstring* passwo
         return false;
       }
       std::wstring cs = BuildConnStr(prov, db_path, password);
-      impl_->conn->Open(_bstr_t(cs.c_str()), L"", L"", adConnectUnspecified);
+      impl_->conn->Open(_bstr_t(cs.c_str()), L"", L"", kAdConnectUnspecified);
       impl_->txn_open = false;
       return true;
     } catch (_com_error& e) {
@@ -178,7 +185,7 @@ bool AdoSession::Connect(const std::wstring& db_path, const std::wstring* passwo
       try {
         impl_->conn.CreateInstance(__uuidof(AdoDb::Connection));
         std::wstring cs = BuildConnStr(L"Microsoft.Jet.OLEDB.4.0", db_path, password);
-        impl_->conn->Open(_bstr_t(cs.c_str()), L"", L"", adConnectUnspecified);
+        impl_->conn->Open(_bstr_t(cs.c_str()), L"", L"", kAdConnectUnspecified);
         impl_->txn_open = false;
         return true;
       } catch (_com_error& e) {
@@ -285,7 +292,7 @@ void AdoSession::EnsureTxnForDml(const std::wstring& sql, std::wstring& err) {
 }
 
 static void PrintRecordset(AdoDb::_RecordsetPtr rs, const DisplaySettings& settings) {
-  if (!rs || rs->GetState() == adStateClosed) return;
+  if (!rs || rs->GetState() == kAdStateClosed) return;
 
   const int linesize = std::clamp(settings.linesize, 20, 500);
 
@@ -337,7 +344,7 @@ static void PrintRecordset(AdoDb::_RecordsetPtr rs, const DisplaySettings& setti
 
   long row_in_page = 0;
   long total_since_more = 0;
-  while (!rs->EndOfFile) {
+  while (!rs->GetADO_EOF()) {
     std::wostringstream line;
     for (size_t vi = 0; vi < visible.size(); ++vi) {
       if (vi) line << L" | ";
@@ -389,7 +396,7 @@ bool AdoSession::ExecuteInteractive(const std::wstring& sql_in, DisplaySettings&
   try {
     if (is_select) {
       _variant_t affected;
-      AdoDb::_RecordsetPtr rs = impl_->conn->Execute(_bstr_t(sql.c_str()), &affected, adCmdText);
+      AdoDb::_RecordsetPtr rs = impl_->conn->Execute(_bstr_t(sql.c_str()), &affected, kAdCmdText);
       PrintRecordset(rs, settings);
       return true;
     }
@@ -398,7 +405,7 @@ bool AdoSession::ExecuteInteractive(const std::wstring& sql_in, DisplaySettings&
     if (!err.empty()) return false;
 
     _variant_t ra;
-    impl_->conn->Execute(_bstr_t(sql.c_str()), &ra, adCmdText);
+    impl_->conn->Execute(_bstr_t(sql.c_str()), &ra, kAdCmdText);
     return true;
   } catch (_com_error& e) {
     err = FormatComError(e);
@@ -413,10 +420,10 @@ bool AdoSession::RunTableList(std::wstring& err) {
     return false;
   }
   try {
-    AdoDb::_RecordsetPtr rs = impl_->conn->OpenSchema(adSchemaTables);
+    AdoDb::_RecordsetPtr rs = impl_->conn->OpenSchema(kAdSchemaTables);
     int count = 0;
     PrintUtf8("TABLE_NAME\tTABLE_TYPE\n");
-    while (!rs->EndOfFile) {
+    while (!rs->GetADO_EOF()) {
       _variant_t name = rs->Fields->GetItem(L"TABLE_NAME")->GetValue();
       _variant_t type = rs->Fields->GetItem(L"TABLE_TYPE")->GetValue();
       std::wstring n = MetaStr(name);
@@ -451,10 +458,10 @@ bool AdoSession::RunQueryList(std::wstring& err) {
     return false;
   }
   try {
-    AdoDb::_RecordsetPtr rs = impl_->conn->OpenSchema(adSchemaViews);
+    AdoDb::_RecordsetPtr rs = impl_->conn->OpenSchema(kAdSchemaViews);
     int count = 0;
     PrintUtf8("VIEW_NAME\n");
-    while (!rs->EndOfFile) {
+    while (!rs->GetADO_EOF()) {
       _variant_t name = rs->Fields->GetItem(L"TABLE_NAME")->GetValue();
       std::wstring n = MetaStr(name);
       if (n.empty()) {
@@ -525,13 +532,29 @@ bool AdoSession::RunDescribe(const std::wstring& name, std::wstring& err) {
       AdoX::_TablePtr tbl = cat->Tables->GetItem(_variant_t(name.c_str()));
       return DumpAdoxColumns(tbl->GetColumns(), err);
     } catch (...) {
-      try {
-        AdoX::_ViewPtr vw = cat->Views->GetItem(_variant_t(name.c_str()));
-        return DumpAdoxColumns(vw->GetColumns(), err);
-      } catch (_com_error& e2) {
-        err = FormatComError(e2);
+      // Fallback: query column schema for view/query names.
+      AdoDb::_RecordsetPtr rs = impl_->conn->OpenSchema(kAdSchemaColumns);
+      PrintUtf8("COLUMN_NAME\tDATA_TYPE\n");
+      int cnt = 0;
+      while (!rs->GetADO_EOF()) {
+        std::wstring tn = MetaStr(rs->Fields->GetItem(L"TABLE_NAME")->GetValue());
+        if (!tn.empty() && _wcsicmp(tn.c_str(), name.c_str()) == 0) {
+          std::wstring cn = MetaStr(rs->Fields->GetItem(L"COLUMN_NAME")->GetValue());
+          std::wstring dt = MetaStr(rs->Fields->GetItem(L"DATA_TYPE")->GetValue());
+          PrintUtf8WideLine(cn + L"\t" + dt);
+          cnt++;
+          if (cnt >= 255) {
+            PrintUtf8("Error: metadata enumeration limit (255) exceeded.\n");
+            return false;
+          }
+        }
+        rs->MoveNext();
+      }
+      if (cnt == 0) {
+        err = L"Object not found.";
         return false;
       }
+      return true;
     }
   } catch (_com_error& e) {
     err = FormatComError(e);
@@ -546,13 +569,19 @@ bool AdoSession::RunShowSql(const std::wstring& name, std::wstring& err) {
     return false;
   }
   try {
-    AdoX::_CatalogPtr cat(__uuidof(AdoX::Catalog));
-    cat->PutActiveConnection(_variant_t(static_cast<IDispatch*>(impl_->conn)));
-    AdoX::_ViewPtr v = cat->Views->GetItem(_variant_t(name.c_str()));
-    AdoX::_CommandPtr cmd = v->GetCommand();
-    std::wstring sql = static_cast<const wchar_t*>(cmd->GetCommandText());
-    PrintUtf8WideLine(sql);
-    return true;
+    AdoDb::_RecordsetPtr rs = impl_->conn->OpenSchema(kAdSchemaViews);
+    while (!rs->GetADO_EOF()) {
+      std::wstring n = MetaStr(rs->Fields->GetItem(L"TABLE_NAME")->GetValue());
+      if (!n.empty() && _wcsicmp(n.c_str(), name.c_str()) == 0) {
+        std::wstring def = MetaStr(rs->Fields->GetItem(L"VIEW_DEFINITION")->GetValue());
+        if (def.empty()) def = L"<definition unavailable>";
+        PrintUtf8WideLine(def);
+        return true;
+      }
+      rs->MoveNext();
+    }
+    err = L"Query definition not found.";
+    return false;
   } catch (_com_error& e) {
     err = FormatComError(e);
     return false;
