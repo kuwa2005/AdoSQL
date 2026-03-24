@@ -8,6 +8,7 @@ Windows 向けの **コマンドライン対話型 Access SQL クライアント
 
 - **仕様**: [仕様書.md](./仕様書.md) に集約
 - **実装**: **初版あり**（CMake + C++ / ADO）。**Tab 補完・行エディタの自前実装は未着手**（Issue #13〜#15）
+- **ビルド確認**: x64 / Win32 の Release ビルド通過済み
 
 ## 実装方針（要約）
 
@@ -16,6 +17,8 @@ Windows 向けの **コマンドライン対話型 Access SQL クライアント
 - **cmd.exe / PowerShell** から利用
 - `adosql.exe` をフォルダにコピーするだけで使う想定。`adosql.ini` は必要に応じて**同じフォルダに自動生成**
 - 対話入力では **Tab 補完**（初版: 対話コマンド・`set` 系・`@` パス、接続後はテーブル／保存クエリ名。詳細は仕様書 §3.4）
+- `help` / `tablelist` / `describe` などのシステムコマンドは **`;` なしで即時実行**、`cls` / `clear` で画面クリア
+- 表示はコンソール横幅に追従して列幅を自動調整（数値右寄せ、文字列左寄せ）
 
 詳細は仕様書 **§0 実装方針** および **§0.1 実装前決定事項（技術方針）** を参照。
 
@@ -48,19 +51,21 @@ adosql.exe <データベースファイルのパス> [パスワード]
 
 ## ビルド（開発者向け）
 
-前提: **Visual Studio 2022**（「C++ によるデスクトップ開発」）、**CMake**（3.20+、PATH に `cmake`）。実行時は対象ビット数に合った **ACE** が必要。
+前提: **Visual Studio 2026**（v18、`vcvars64.bat` / `vcvars32.bat` 利用）または同等の MSVC 環境、**CMake**（3.20+、PATH に `cmake`）。実行時は対象ビット数に合った **ACE** が必要。
 
 ```powershell
-cmake -B build -G "Visual Studio 17 2022" -A x64
+cmake -B build -G "Visual Studio 18 2026" -A x64
 cmake --build build --config Release
 # 出力: build\Release\adosql.exe
 
 # 32bit (Win32)
-cmake -B build32 -G "Visual Studio 17 2022" -A Win32
+cmake -B build32 -G "Visual Studio 18 2026" -A Win32
 cmake --build build32 --config Release
 ```
 
 `#import` は既定で `C:\Program Files\Common Files\System\ado\`（x64）または `Program Files (x86)\...`（Win32）の `msado15.dll` / `msadox.dll` を参照する。標準以外の配置なら `ado_session.cpp` のパスを環境に合わせて変更すること。
+
+PowerShell ではカレントディレクトリの実行時に `.\adosql.exe` を使う（`adosql` 単体では起動しない）。
 
 ## 貢献
 
