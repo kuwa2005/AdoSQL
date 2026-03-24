@@ -1,0 +1,40 @@
+# Visual Studio / MSBuild
+.vs/
+*.user
+*.userosscache
+*.sln.docstates
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Ww][Ii][Nn]32/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+bld/
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+*.obj
+*.pch
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.dll
+*.exe
+!**/tools/**/*.exe
+
+# CMake
+[Bb]uild/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+out/
+
+# ローカル・OS
+Thumbs.db
+Desktop.ini
+*.tmp
+*.swp
+*~
