@@ -42,6 +42,10 @@ adosql.exe <データベースファイルのパス> [パスワード]
 
 [MIT License](./LICENSE)（Copyright (c) 2026 kuwa2005）
 
+## 実装タスク（GitHub Issues）
+
+実装は [Issues](https://github.com/kuwa2005/AdoSQL/issues) にチェックリスト付きで分割してある。各 Issue の元テキストはリポジトリの [`.github/issue-bodies/`](./.github/issue-bodies/) にも置いてある（再作成・オフライン参照用）。
+
 ## 貢献・ビルド
 
 実装開始後にビルド手順・開発環境を追記する。
