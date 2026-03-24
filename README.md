@@ -7,7 +7,7 @@ Windows 向けの **コマンドライン対話型 Access SQL クライアント
 ## ステータス
 
 - **仕様**: [仕様書.md](./仕様書.md) に集約
-- **実装**: 未着手（リポジトリはドキュメント先行で公開）
+- **実装**: **初版あり**（CMake + C++ / ADO）。**Tab 補完・行エディタの自前実装は未着手**（Issue #13〜#15）
 
 ## 実装方針（要約）
 
@@ -46,6 +46,22 @@ adosql.exe <データベースファイルのパス> [パスワード]
 
 実装は [Issues](https://github.com/kuwa2005/AdoSQL/issues) にチェックリスト付きで分割してある。各 Issue の元テキストはリポジトリの [`.github/issue-bodies/`](./.github/issue-bodies/) にも置いてある（再作成・オフライン参照用）。
 
-## 貢献・ビルド
+## ビルド（開発者向け）
 
-実装開始後にビルド手順・開発環境を追記する。
+前提: **Visual Studio 2022**（「C++ によるデスクトップ開発」）、**CMake**（3.20+、PATH に `cmake`）。実行時は対象ビット数に合った **ACE** が必要。
+
+```powershell
+cmake -B build -G "Visual Studio 17 2022" -A x64
+cmake --build build --config Release
+# 出力: build\Release\adosql.exe
+
+# 32bit (Win32)
+cmake -B build32 -G "Visual Studio 17 2022" -A Win32
+cmake --build build32 --config Release
+```
+
+`#import` は既定で `C:\Program Files\Common Files\System\ado\`（x64）または `Program Files (x86)\...`（Win32）の `msado15.dll` / `msadox.dll` を参照する。標準以外の配置なら `ado_session.cpp` のパスを環境に合わせて変更すること。
+
+## 貢献
+
+Issue ベースで進めています（上記「実装タスク」参照）。

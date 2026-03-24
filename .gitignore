@@ -31,6 +31,7 @@ CMakeFiles/
 CMakeCache.txt
 cmake_install.cmake
 out/
+build/
 
 # ローカル・OS
 Thumbs.db
