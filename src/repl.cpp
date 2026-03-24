@@ -76,8 +76,8 @@ bool IsKnownFirstToken(const std::wstring& ft) {
   static const std::unordered_set<std::wstring> k = {
       L"exit",    L"quit",     L"help",     L"?",        L"/?",        L"set",        L"show",
       L"prompt",  L"select",   L"insert",   L"update",   L"delete",    L"create",     L"alter",
-      L"drop",    L"commit",   L"rollback", L"describe", L"desc",      L"showsql",    L"tablelist",
-      L"querylist", L"with",
+      L"drop",    L"commit",   L"rollback", L"describe", L"descrive",  L"desc",       L"showsql",    L"tablelist",
+      L"querylist", L"with",   L"cls",      L"clear",
   };
   return k.find(ft) != k.end();
 }
@@ -162,6 +162,19 @@ bool IsShowSettings(const std::wstring& stmt) {
   return a == L"show" && b == L"settings";
 }
 
+bool IsImmediateCommand(const std::wstring& stmt) {
+  const std::wstring ft = FirstTokenLower(stmt);
+  if (ft.empty()) return false;
+  if (ft == L"help" || ft == L"?" || ft == L"/?" || ft == L"tablelist" || ft == L"querylist" || ft == L"describe" ||
+      ft == L"descrive" || ft == L"desc" || ft == L"showsql" || ft == L"show" || ft == L"set" || ft == L"prompt" || ft == L"commit" ||
+      ft == L"rollback" || ft == L"exit" || ft == L"quit" || ft == L"cls" || ft == L"clear") {
+    return true;
+  }
+  if (!stmt.empty() && stmt[0] == L'@') return true;
+  if (HandleSlashSlashLine(stmt)) return true;
+  return false;
+}
+
 void DispatchStatement(const std::wstring& stmt_in, AdoSession& session, DisplaySettings& settings, ScriptStack& scripts,
                        bool& quit) {
   quit = false;
@@ -223,6 +236,11 @@ void DispatchStatement(const std::wstring& stmt_in, AdoSession& session, Display
     return;
   }
 
+  if (ft == L"cls" || ft == L"clear") {
+    ClearConsoleScreen();
+    return;
+  }
+
   if (ft == L"commit") {
     std::wstring err;
     session.Commit(err);
@@ -247,7 +265,7 @@ void DispatchStatement(const std::wstring& stmt_in, AdoSession& session, Display
     return;
   }
 
-  if (ft == L"describe" || ft == L"desc") {
+  if (ft == L"describe" || ft == L"descrive" || ft == L"desc") {
     std::wistringstream iss(stmt);
     std::wstring a, name;
     iss >> a >> name;
@@ -324,6 +342,16 @@ void RunRepl(AdoSession& session, DisplaySettings& settings) {
     }
 
     if (!acc.empty()) acc.push_back(L'\n');
+    if (acc.empty() && line.find(L';') == std::wstring::npos && IsImmediateCommand(line)) {
+      bool quit = false;
+      DispatchStatement(line, session, settings, scripts, quit);
+      if (quit) {
+        session.OnExitSession();
+        return;
+      }
+      continue;
+    }
+
     acc += line;
 
     if (acc.find(L';') != std::wstring::npos) {

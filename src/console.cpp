@@ -42,6 +42,19 @@ void PrintUtf8WideLine(const std::wstring& ws) {
   PrintUtf8("\n");
 }
 
+void ClearConsoleScreen() {
+  HANDLE h = StdOut();
+  if (h == INVALID_HANDLE_VALUE) return;
+  CONSOLE_SCREEN_BUFFER_INFO csbi{};
+  if (!GetConsoleScreenBufferInfo(h, &csbi)) return;
+  const DWORD cells = static_cast<DWORD>(csbi.dwSize.X) * static_cast<DWORD>(csbi.dwSize.Y);
+  COORD home{0, 0};
+  DWORD written = 0;
+  FillConsoleOutputCharacterW(h, L' ', cells, home, &written);
+  FillConsoleOutputAttribute(h, csbi.wAttributes, cells, home, &written);
+  SetConsoleCursorPosition(h, home);
+}
+
 bool ReadConsoleLineWide(std::wstring& out, bool& eof, bool& overflowed, std::wstring& err) {
   out.clear();
   eof = false;
