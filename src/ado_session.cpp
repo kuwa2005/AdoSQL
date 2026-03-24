@@ -139,8 +139,8 @@ std::wstring Repeat(wchar_t ch, int n) {
 std::wstring FitCell(const std::wstring& s, int width) {
   if (width <= 0) return {};
   if (static_cast<int>(s.size()) <= width) return s;
-  if (width <= 1) return s.substr(0, static_cast<size_t>(width));
-  return s.substr(0, static_cast<size_t>(width - 1)) + L"…";
+  if (width <= 3) return s.substr(0, static_cast<size_t>(width));
+  return s.substr(0, static_cast<size_t>(width - 3)) + L"...";
 }
 
 std::wstring PadCell(const std::wstring& s, int width, bool right_align) {
