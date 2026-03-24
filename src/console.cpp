@@ -55,6 +55,16 @@ void ClearConsoleScreen() {
   SetConsoleCursorPosition(h, home);
 }
 
+int GetConsoleWidthOrDefault(int fallback) {
+  HANDLE h = StdOut();
+  if (h == INVALID_HANDLE_VALUE) return fallback;
+  CONSOLE_SCREEN_BUFFER_INFO csbi{};
+  if (!GetConsoleScreenBufferInfo(h, &csbi)) return fallback;
+  const int w = static_cast<int>(csbi.srWindow.Right - csbi.srWindow.Left + 1);
+  if (w < 20) return fallback;
+  return w;
+}
+
 bool ReadConsoleLineWide(std::wstring& out, bool& eof, bool& overflowed, std::wstring& err) {
   out.clear();
   eof = false;

@@ -7,6 +7,8 @@
 #include <cwctype>
 #include <iomanip>
 #include <sstream>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 #ifdef _WIN64
@@ -127,6 +129,82 @@ std::wstring BuildConnStr(const wchar_t* provider, const std::wstring& path, con
     s += *password;
   }
   return s;
+}
+
+std::wstring Repeat(wchar_t ch, int n) {
+  if (n <= 0) return {};
+  return std::wstring(static_cast<size_t>(n), ch);
+}
+
+std::wstring FitCell(const std::wstring& s, int width) {
+  if (width <= 0) return {};
+  if (static_cast<int>(s.size()) <= width) return s;
+  if (width <= 1) return s.substr(0, static_cast<size_t>(width));
+  return s.substr(0, static_cast<size_t>(width - 1)) + L"…";
+}
+
+std::wstring PadCell(const std::wstring& s, int width, bool right_align) {
+  const std::wstring f = FitCell(s, width);
+  const int pad = std::max(0, width - static_cast<int>(f.size()));
+  if (right_align) return Repeat(L' ', pad) + f;
+  return f + Repeat(L' ', pad);
+}
+
+void FitWidthsToLine(std::vector<int>& widths, int line_width) {
+  if (widths.empty()) return;
+  const int sep = static_cast<int>(widths.size() - 1) * 3;  // " | "
+  auto sum = [&]() {
+    int s = 0;
+    for (int w : widths) s += w;
+    return s + sep;
+  };
+  int total = sum();
+  while (total > line_width) {
+    size_t idx = 0;
+    for (size_t i = 1; i < widths.size(); ++i) {
+      if (widths[i] > widths[idx]) idx = i;
+    }
+    if (widths[idx] <= 6) break;
+    widths[idx]--;
+    total = sum();
+  }
+}
+
+void PrintHeader(const std::vector<std::wstring>& headers, const std::vector<int>& widths) {
+  std::wostringstream h;
+  std::wostringstream u;
+  for (size_t i = 0; i < headers.size(); ++i) {
+    if (i) {
+      h << L" | ";
+      u << L"-+-";
+    }
+    h << PadCell(headers[i], widths[i], false);
+    u << Repeat(L'-', widths[i]);
+  }
+  PrintUtf8WideLine(h.str());
+  PrintUtf8WideLine(u.str());
+}
+
+bool IsNumericDataType(long ado_type) {
+  switch (ado_type) {
+    case 2:   // SmallInt
+    case 3:   // Integer
+    case 4:   // Single
+    case 5:   // Double
+    case 6:   // Currency
+    case 14:  // Decimal
+    case 16:  // TinyInt
+    case 17:  // UnsignedTinyInt
+    case 18:  // UnsignedSmallInt
+    case 19:  // UnsignedInt
+    case 20:  // BigInt
+    case 21:  // UnsignedBigInt
+    case 131: // Numeric
+    case 139: // VarNumeric
+      return true;
+    default:
+      return false;
+  }
 }
 
 }  // namespace
@@ -294,21 +372,32 @@ void AdoSession::EnsureTxnForDml(const std::wstring& sql, std::wstring& err) {
 static void PrintRecordset(AdoDb::_RecordsetPtr rs, const DisplaySettings& settings) {
   if (!rs || rs->GetState() == kAdStateClosed) return;
 
-  const int linesize = std::clamp(settings.linesize, 20, 500);
+  const int effective_width = GetConsoleWidthOrDefault(120);
+  const int linesize = std::min(std::clamp(settings.linesize, 20, 500), effective_width);
 
   auto fields = rs->GetFields();
   const long n = fields->GetCount();
   std::vector<std::wstring> names;
-  std::vector<long> widths;
+  std::vector<int> widths;
+  std::vector<bool> right_align;
   names.reserve(static_cast<size_t>(n));
   widths.reserve(static_cast<size_t>(n));
+  right_align.reserve(static_cast<size_t>(n));
   for (long i = 0; i < n; ++i) {
     auto f = fields->Item[_variant_t(i)];
     std::wstring nm = static_cast<const wchar_t*>(f->GetName());
     names.push_back(nm);
-    long w = static_cast<long>(nm.size());
-    if (w < 8) w = 8;
+    int w = static_cast<int>(nm.size());
+    long def_size = 0;
+    try {
+      def_size = f->GetDefinedSize();
+    } catch (...) {
+      def_size = 0;
+    }
+    if (def_size > 0) w = std::max(w, std::min(40, static_cast<int>(def_size)));
+    w = std::clamp(w, 6, 40);
     widths.push_back(w);
+    right_align.push_back(IsNumericDataType(static_cast<long>(f->GetType())));
   }
 
   std::vector<long> visible;
@@ -325,21 +414,24 @@ static void PrintRecordset(AdoDb::_RecordsetPtr rs, const DisplaySettings& setti
   } else {
     for (long i = 0; i < n; ++i) visible.push_back(i);
   }
+  if (!visible.empty()) {
+    std::vector<int> vw;
+    vw.reserve(visible.size());
+    for (long idx : visible) vw.push_back(widths[static_cast<size_t>(idx)]);
+    FitWidthsToLine(vw, linesize);
+    for (size_t i = 0; i < visible.size(); ++i) widths[static_cast<size_t>(visible[i])] = vw[i];
+  }
 
   {
-    std::wostringstream hdr;
-    for (size_t vi = 0; vi < visible.size(); ++vi) {
-      if (vi) hdr << L" | ";
-      long i = visible[vi];
-      std::wstring col = names[static_cast<size_t>(i)];
-      if (static_cast<int>(col.size()) > widths[static_cast<size_t>(i)])
-        col.resize(static_cast<size_t>(widths[static_cast<size_t>(i)]));
-      hdr << col;
+    std::vector<std::wstring> headers;
+    std::vector<int> hw;
+    headers.reserve(visible.size());
+    hw.reserve(visible.size());
+    for (long idx : visible) {
+      headers.push_back(names[static_cast<size_t>(idx)]);
+      hw.push_back(widths[static_cast<size_t>(idx)]);
     }
-    std::wstring hs = hdr.str();
-    if (static_cast<int>(hs.size()) > linesize) hs.resize(static_cast<size_t>(linesize));
-    PrintUtf8WideLine(hs);
-    PrintUtf8WideLine(std::wstring(std::min<size_t>(static_cast<size_t>(linesize), 40), L'-'));
+    PrintHeader(headers, hw);
   }
 
   long row_in_page = 0;
@@ -352,13 +444,9 @@ static void PrintRecordset(AdoDb::_RecordsetPtr rs, const DisplaySettings& setti
       auto f = fields->Item[_variant_t(i)];
       _variant_t v = f->GetValue();
       std::wstring cell = VariantToText(v);
-      if (static_cast<int>(cell.size()) > widths[static_cast<size_t>(i)])
-        cell.resize(static_cast<size_t>(widths[static_cast<size_t>(i)]));
-      line << cell;
+      line << PadCell(cell, widths[static_cast<size_t>(i)], right_align[static_cast<size_t>(i)]);
     }
-    std::wstring ls = line.str();
-    if (static_cast<int>(ls.size()) > linesize) ls.resize(static_cast<size_t>(linesize));
-    PrintUtf8WideLine(ls);
+    PrintUtf8WideLine(line.str());
 
     rs->MoveNext();
     row_in_page++;
@@ -422,7 +510,8 @@ bool AdoSession::RunTableList(std::wstring& err) {
   try {
     AdoDb::_RecordsetPtr rs = impl_->conn->OpenSchema(kAdSchemaTables);
     int count = 0;
-    PrintUtf8("TABLE_NAME\tTABLE_TYPE\n");
+    std::vector<std::pair<std::wstring, std::wstring>> rows;
+    rows.reserve(64);
     while (!rs->GetADO_EOF()) {
       _variant_t name = rs->Fields->GetItem(L"TABLE_NAME")->GetValue();
       _variant_t type = rs->Fields->GetItem(L"TABLE_TYPE")->GetValue();
@@ -436,13 +525,27 @@ bool AdoSession::RunTableList(std::wstring& err) {
         continue;
       }
       std::wstring t = MetaStr(type);
-      PrintUtf8WideLine(n + L"\t" + t);
+      rows.emplace_back(n, t);
       count++;
       if (count >= 255) {
         PrintUtf8("Error: metadata enumeration limit (255) exceeded.\n");
         return false;
       }
       rs->MoveNext();
+    }
+    const int cw = GetConsoleWidthOrDefault(120);
+    int w1 = 10, w2 = 10;
+    for (const auto& r : rows) {
+      w1 = std::max(w1, static_cast<int>(r.first.size()));
+      w2 = std::max(w2, static_cast<int>(r.second.size()));
+    }
+    w1 = std::clamp(w1, 8, 60);
+    w2 = std::clamp(w2, 8, 30);
+    std::vector<int> ws{w1, w2};
+    FitWidthsToLine(ws, cw);
+    PrintHeader({L"TABLE_NAME", L"TABLE_TYPE"}, ws);
+    for (const auto& r : rows) {
+      PrintUtf8WideLine(PadCell(r.first, ws[0], false) + L" | " + PadCell(r.second, ws[1], false));
     }
     return true;
   } catch (_com_error& e) {
@@ -460,7 +563,8 @@ bool AdoSession::RunQueryList(std::wstring& err) {
   try {
     AdoDb::_RecordsetPtr rs = impl_->conn->OpenSchema(kAdSchemaViews);
     int count = 0;
-    PrintUtf8("VIEW_NAME\n");
+    std::vector<std::wstring> rows;
+    rows.reserve(64);
     while (!rs->GetADO_EOF()) {
       _variant_t name = rs->Fields->GetItem(L"TABLE_NAME")->GetValue();
       std::wstring n = MetaStr(name);
@@ -468,7 +572,7 @@ bool AdoSession::RunQueryList(std::wstring& err) {
         rs->MoveNext();
         continue;
       }
-      PrintUtf8WideLine(n);
+      rows.push_back(n);
       count++;
       if (count >= 255) {
         PrintUtf8("Error: metadata enumeration limit (255) exceeded.\n");
@@ -476,6 +580,14 @@ bool AdoSession::RunQueryList(std::wstring& err) {
       }
       rs->MoveNext();
     }
+    const int cw = GetConsoleWidthOrDefault(120);
+    int w = 10;
+    for (const auto& r : rows) w = std::max(w, static_cast<int>(r.size()));
+    w = std::clamp(w, 8, 100);
+    std::vector<int> ws{w};
+    FitWidthsToLine(ws, cw);
+    PrintHeader({L"QUERY_NAME"}, ws);
+    for (const auto& r : rows) PrintUtf8WideLine(PadCell(r, ws[0], false));
     return true;
   } catch (_com_error& e) {
     err = FormatComError(e);
@@ -491,7 +603,13 @@ bool DumpAdoxColumns(AdoX::ColumnsPtr cols, std::wstring& err) {
     err = L"No column metadata.";
     return false;
   }
-  PrintUtf8("NAME\tTYPE\tDEFINED_SIZE\n");
+  struct Row {
+    std::wstring name;
+    std::wstring type;
+    std::wstring size;
+  };
+  std::vector<Row> rows;
+  rows.reserve(64);
   int cnt = 0;
   const long c = cols->GetCount();
   for (long i = 0; i < c; ++i) {
@@ -504,14 +622,29 @@ bool DumpAdoxColumns(AdoX::ColumnsPtr cols, std::wstring& err) {
     } catch (...) {
       dsize = 0;
     }
-    std::wostringstream os;
-    os << cn << L'\t' << dtype << L'\t' << dsize;
-    PrintUtf8WideLine(os.str());
+    rows.push_back({cn, std::to_wstring(dtype), std::to_wstring(dsize)});
     cnt++;
     if (cnt >= 255) {
       PrintUtf8("Error: metadata enumeration limit (255) exceeded.\n");
       return false;
     }
+  }
+  const int cw = GetConsoleWidthOrDefault(120);
+  int w1 = 8, w2 = 8, w3 = 8;
+  for (const auto& r : rows) {
+    w1 = std::max(w1, static_cast<int>(r.name.size()));
+    w2 = std::max(w2, static_cast<int>(r.type.size()));
+    w3 = std::max(w3, static_cast<int>(r.size.size()));
+  }
+  w1 = std::clamp(w1, 8, 60);
+  w2 = std::clamp(w2, 8, 16);
+  w3 = std::clamp(w3, 8, 16);
+  std::vector<int> ws{w1, w2, w3};
+  FitWidthsToLine(ws, cw);
+  PrintHeader({L"NAME", L"TYPE", L"DEFINED_SIZE"}, ws);
+  for (const auto& r : rows) {
+    PrintUtf8WideLine(PadCell(r.name, ws[0], false) + L" | " + PadCell(r.type, ws[1], true) + L" | " +
+                      PadCell(r.size, ws[2], true));
   }
   return true;
 }
@@ -534,14 +667,15 @@ bool AdoSession::RunDescribe(const std::wstring& name, std::wstring& err) {
     } catch (...) {
       // Fallback: query column schema for view/query names.
       AdoDb::_RecordsetPtr rs = impl_->conn->OpenSchema(kAdSchemaColumns);
-      PrintUtf8("COLUMN_NAME\tDATA_TYPE\n");
+      std::vector<std::pair<std::wstring, std::wstring>> rows;
+      rows.reserve(64);
       int cnt = 0;
       while (!rs->GetADO_EOF()) {
         std::wstring tn = MetaStr(rs->Fields->GetItem(L"TABLE_NAME")->GetValue());
         if (!tn.empty() && _wcsicmp(tn.c_str(), name.c_str()) == 0) {
           std::wstring cn = MetaStr(rs->Fields->GetItem(L"COLUMN_NAME")->GetValue());
           std::wstring dt = MetaStr(rs->Fields->GetItem(L"DATA_TYPE")->GetValue());
-          PrintUtf8WideLine(cn + L"\t" + dt);
+          rows.emplace_back(cn, dt);
           cnt++;
           if (cnt >= 255) {
             PrintUtf8("Error: metadata enumeration limit (255) exceeded.\n");
@@ -553,6 +687,20 @@ bool AdoSession::RunDescribe(const std::wstring& name, std::wstring& err) {
       if (cnt == 0) {
         err = L"Object not found.";
         return false;
+      }
+      const int cw = GetConsoleWidthOrDefault(120);
+      int w1 = 11, w2 = 9;
+      for (const auto& r : rows) {
+        w1 = std::max(w1, static_cast<int>(r.first.size()));
+        w2 = std::max(w2, static_cast<int>(r.second.size()));
+      }
+      w1 = std::clamp(w1, 8, 60);
+      w2 = std::clamp(w2, 8, 24);
+      std::vector<int> ws{w1, w2};
+      FitWidthsToLine(ws, cw);
+      PrintHeader({L"COLUMN_NAME", L"DATA_TYPE"}, ws);
+      for (const auto& r : rows) {
+        PrintUtf8WideLine(PadCell(r.first, ws[0], false) + L" | " + PadCell(r.second, ws[1], true));
       }
       return true;
     }
